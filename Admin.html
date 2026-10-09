@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html>
+<head>
+<base target="_top">
+<link rel="icon" href="https://raw.githubusercontent.com/Aonint12/images/main/pea_logo_big.png">
+<meta charset="utf-8">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css">
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;font-family:'Sarabun',sans-serif;background:#f4f1f8;color:#222}
+  header{background:#74045f;color:#fff;padding:14px 18px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+  header h1{margin:0;font-size:20px}
+  .login{max-width:340px;margin:80px auto;background:#fff;padding:24px;border-radius:12px;text-align:center}
+  .main{display:none;padding:14px;max-width:1280px;margin:auto}
+  .grid{display:grid;grid-template-columns:440px 1fr;gap:14px;align-items:start}
+  .box{background:#fff;border-radius:10px;padding:14px;margin-bottom:14px}
+  label{display:block;font-size:13px;font-weight:600;margin:8px 0 3px}
+  input,textarea,select{width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-family:inherit;font-size:14px}
+  button{font-family:inherit;padding:8px 16px;border:0;border-radius:6px;cursor:pointer;background:#74045f;color:#fff;font-size:14px}
+  button.gray{background:#868e96}button.red{background:#e03131}button.sm{padding:3px 10px;font-size:12px}button.green{background:#2f9e44}
+  button.on{background:#e8590c}
+  .slot{display:grid;grid-template-columns:1.4fr 1fr 1fr auto;gap:6px;margin-bottom:6px;align-items:center}
+  .slot input{padding:6px}
+  .lblbar{display:flex;gap:6px;margin:8px 0}
+  .lblbar input{flex:1}
+  #map{height:540px;border-radius:8px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{padding:6px;border-bottom:1px solid #eee;text-align:left;vertical-align:top}
+  .hint{font-size:12px;color:#666;margin:6px 0}
+  @media(max-width:950px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header><div style="display:flex;align-items:center;gap:12px"><img src="https://raw.githubusercontent.com/Aonint12/images/main/pea_logo_big.png" alt="PEA" style="height:46px;width:46px;object-fit:contain;background:#fff;border-radius:50%;padding:3px"><h1>จัดการประกาศดับไฟ - กฟภ.สาขาวัดสิงห์</h1></div><div><a href="<?= publicUrl ?>" target="_top" style="color:#fff;margin-right:12px;font-size:14px">← หน้าประชาชน</a><span id="who" style="margin-right:10px;font-size:14px"></span><button class="gray sm" id="logout" style="display:none">ออกจากระบบ</button></div></header>
+
+<div class="login" id="login">
+  <h3>เข้าสู่ระบบเจ้าหน้าที่</h3>
+  <input type="password" id="pw" placeholder="รหัสผ่าน">
+  <p><button id="loginBtn">เข้าสู่ระบบ</button></p>
+  <div id="loginErr" style="color:#e03131;font-size:13px"></div>
+</div>
+
+<div class="main" id="main">
+  <p><button id="newBtn" style="font-size:16px;padding:10px 20px">➕ เพิ่มประกาศใหม่</button></p>
+  <div class="grid">
+    <div class="box">
+      <h3 id="formTitle" style="margin-top:0">เพิ่มประกาศใหม่</h3>
+      <input type="hidden" id="id">
+      <label>พื้นที่ที่ได้รับผลกระทบ * (ขึ้นบรรทัดใหม่ = คนละรายการบนภาพประกาศ)</label>
+      <textarea id="area" rows="3" placeholder="เช่น บ้านทุ่งพงษ์&#10;หมู่ที่ 8 ตำบลหนองน้อย อำเภอวัดสิงห์ จังหวัดชัยนาท"></textarea>
+      <label>สาเหตุ</label><input id="reason" placeholder="เช่น ปรับปรุงระบบจำหน่ายไฟฟ้าแรงสูง">
+      <label>วัน – เวลาที่ดับ * (เพิ่มได้หลายช่วง)</label>
+      <div id="slots"></div>
+      <button type="button" class="green sm" id="addSlot">➕ เพิ่มช่วงวัน-เวลา (วันถัดไป เวลาเดิม)</button>
+      <label>หมายเหตุ</label><textarea id="remark" rows="4"></textarea>
+      <label>สถานะ</label>
+      <select id="status"><option>ประกาศ</option><option>เลื่อน</option><option>เสร็จสิ้น</option><option>ยกเลิก</option></select>
+      <p style="margin-top:12px">
+        <button id="saveBtn">💾 บันทึกประกาศ</button>
+        <button class="green" id="posterBtn">🖼 สร้างภาพประกาศ</button>
+        <button class="gray" id="resetBtn">ล้างฟอร์ม</button>
+      </p>
+      <div id="msg" class="hint"></div>
+    </div>
+    <div class="box">
+      <b>ปักหมุด / ตีเส้น / ครอบพื้นที่ / เขียนป้ายกำกับ</b>
+      <div class="hint">
+        เครื่องมือมุมซ้ายบนของแผนที่: ⎯ <b>ตีเส้น</b> (คลิกจุดเริ่มต้น → คลิกจุดต่อไป → คลิกจุดสุดท้ายซ้ำเพื่อจบ ระบบแสดงป้าย "เริ่มต้น/สิ้นสุด" ให้อัตโนมัติ) · ⬠ วาดพื้นที่ · ▭ สี่เหลี่ยม · 📍 ปักหมุด · ปุ่มแก้ไข/ถังขยะ ใช้ปรับหรือลบรูป
+      </div>
+      <div class="lblbar">
+        <input id="lblText" value="พื้นที่ไฟดับ" placeholder="ข้อความป้ายกำกับ">
+        <button type="button" id="lblBtn">🏷 วางป้ายกำกับ</button>
+      </div>
+      <div class="hint">พิมพ์ข้อความ → กด "วางป้ายกำกับ" → คลิกบนแผนที่ตรงที่ต้องการ · คลิกขวาที่ป้ายเพื่อแก้ข้อความ (เว้นว่าง = ลบ)</div>
+      <div id="map"></div>
+    </div>
+  </div>
+
+  <div class="box">
+    <h3 style="margin-top:0">รายการประกาศทั้งหมด</h3>
+    <div style="overflow-x:auto"><table>
+      <thead><tr><th>วัน-เวลา</th><th>บริเวณ</th><th>สาเหตุ</th><th>สถานะ</th><th>แผนที่</th><th>ผู้บันทึก</th><th></th></tr></thead>
+      <tbody id="tbody"></tbody>
+    </table></div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+<?!= include('Shared') ?>
+<script>
+let PW = '', rows = [], map, drawn, decor, placing = false, DEFAULT_REMARK = '';
+const $ = id => document.getElementById(id);
+const FIELDS = ['id','area','reason','remark','status'];
+CFG_P.then(c => { DEFAULT_REMARK = c.defaultRemark || ''; if(!$('remark').value && !$('id').value) $('remark').value = DEFAULT_REMARK; });
+
+/* ---------- ช่วงวัน-เวลา ---------- */
+function slotRow(s){
+  const d = document.createElement('div'); d.className = 'slot';
+  d.innerHTML = '<input type="date" class="sd"><input type="time" class="ss"><input type="time" class="se"><button type="button" class="red sm">✕</button>';
+  d.querySelector('.sd').value = s.date || ''; d.querySelector('.ss').value = s.start || ''; d.querySelector('.se').value = s.end || '';
+  d.querySelector('button').onclick = () => { if(document.querySelectorAll('.slot').length > 1) d.remove(); };
+  return d;
+}
+function getSlots(){
+  return [...document.querySelectorAll('.slot')].map(r => ({date:r.querySelector('.sd').value, start:r.querySelector('.ss').value, end:r.querySelector('.se').value})).filter(s => s.date);
+}
+function setSlots(arr){
+  $('slots').innerHTML = '';
+  (arr && arr.length ? arr : [{date:'', start:'09:00', end:'17:00'}]).forEach(s => $('slots').appendChild(slotRow(s)));
+}
+function addDay(s){ const d = new Date(s+'T00:00:00Z'); d.setUTCDate(d.getUTCDate()+1); return d.toISOString().slice(0,10); }
+$('addSlot').onclick = () => {
+  const all = [...document.querySelectorAll('.slot')], last = all[all.length-1];
+  const ld = last.querySelector('.sd').value;
+  $('slots').appendChild(slotRow({date: ld ? addDay(ld) : '', start: last.querySelector('.ss').value || '09:00', end: last.querySelector('.se').value || '17:00'}));
+};
+
+/* ---------- แผนที่ ---------- */
+function refreshDecor(){
+  decor.clearLayers();
+  drawn.eachLayer(l => { if(l instanceof L.Polyline && !(l instanceof L.Polygon)) addLineEnds(decor, l.getLatLngs()); });
+}
+function initMap(){
+  const sat = L.layerGroup([
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {maxZoom:19, maxNativeZoom:18, crossOrigin:true, attribution:'Tiles © Esri'}),
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', {maxZoom:19, maxNativeZoom:18, crossOrigin:true})
+  ]);
+  const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19, attribution:'© OpenStreetMap'});
+  map = L.map('map', {layers:[sat]}).setView([15.17, 100.18], 12);
+  L.control.layers({'🛰 ดาวเทียม':sat, '🗺 แผนที่ถนน':osm}).addTo(map);
+  drawn = new L.FeatureGroup().addTo(map);
+  decor = L.layerGroup().addTo(map);
+  const red = {color:'#ff3b30'};
+  map.addControl(new L.Control.Draw({
+    edit: {featureGroup: drawn},
+    draw: {polyline:{shapeOptions:{color:'#ff3b30', weight:5}}, circle:false, circlemarker:false, marker:true,
+           polygon:{allowIntersection:false, showArea:false, shapeOptions:red}, rectangle:{shapeOptions:red}}
+  }));
+  map.on(L.Draw.Event.CREATED, e => { drawn.addLayer(e.layer); refreshDecor(); });
+  map.on(L.Draw.Event.EDITED, refreshDecor);
+  map.on(L.Draw.Event.DELETED, refreshDecor);
+  map.on(L.Draw.Event.EDITSTOP, refreshDecor);
+  map.on('click', e => {
+    if(!placing) return;
+    drawn.addLayer(labelMarker(e.latlng, $('lblText').value.trim() || 'พื้นที่ไฟดับ'));
+    setPlacing(false);
+  });
+  drawn.on('contextmenu', e => {
+    const l = e.layer, p = l.feature && l.feature.properties;
+    if(!p || p.label === undefined) return;
+    const t = prompt('แก้ไขข้อความป้าย (เว้นว่าง = ลบป้าย)', p.label);
+    if(t === null) return;
+    if(!t.trim()){ drawn.removeLayer(l); return; }
+    p.label = t.trim(); l.setIcon(labelIcon(p.label));
+  });
+}
+function setPlacing(v){
+  placing = v; $('lblBtn').classList.toggle('on', v);
+  $('lblBtn').textContent = v ? '👆 คลิกบนแผนที่เพื่อวาง...' : '🏷 วางป้ายกำกับ';
+  map.getContainer().style.cursor = v ? 'crosshair' : '';
+}
+$('lblBtn').onclick = () => setPlacing(!placing);
+
+function loadGeo(str){
+  drawn.clearLayers();
+  L.geoJSON(parseGeo(str), {pointToLayer:(f, ll) => (f.properties && f.properties.label) ? labelMarker(ll, f.properties.label) : L.marker(ll)})
+    .eachLayer(l => drawn.addLayer(l));
+  refreshDecor();
+  if(drawn.getLayers().length) map.fitBounds(drawn.getBounds(), {maxZoom:17, padding:[30,30]});
+}
+
+/* ---------- เข้าสู่ระบบ ---------- */
+function login(){
+  PW = $('pw').value;
+  $('loginErr').textContent = 'กำลังตรวจสอบ...';
+  google.script.run.withSuccessHandler(r => {
+    rows = r.rows; $('who').textContent = '👤 ' + r.position;
+    $('login').style.display = 'none'; $('main').style.display = 'block'; $('logout').style.display = '';
+    if(!map) initMap(); setSlots(); $('remark').value = DEFAULT_REMARK;
+    setTimeout(() => map.invalidateSize(), 100); renderTable();
+  }).withFailureHandler(e => $('loginErr').textContent = e.message).adminList(PW);
+}
+$('loginBtn').onclick = login;
+$('pw').onkeydown = e => { if(e.key === 'Enter') login(); };
+$('logout').onclick = () => location.reload();
+function reload(){ google.script.run.withSuccessHandler(r => {rows = r.rows; renderTable();}).adminList(PW); }
+
+/* ---------- ตาราง ---------- */
+function renderTable(){
+  const sorted = [...rows].sort((a,b) => sortKey(b).localeCompare(sortKey(a)));
+  $('tbody').innerHTML = sorted.map(o => `<tr>
+    <td>${slotsOf(o).map(s => esc(thDate(s.date)+(s.start?' '+s.start+'-'+s.end:''))).join('<br>')}</td>
+    <td>${esc(o.area).replace(/\n/g,'<br>')}</td><td>${esc(o.reason)}</td><td>${esc(o.status)}</td><td>${o.geojson?'✔':'-'}</td><td>${esc(o.updatedBy)}</td>
+    <td style="white-space:nowrap"><button class="sm" onclick="edit('${esc(o.id)}')">แก้ไข</button>
+      <button class="sm green" onclick="posterOf('${esc(o.id)}')">🖼</button>
+      <button class="sm red" onclick="del('${esc(o.id)}')">ลบ</button></td></tr>`).join('')
+    || '<tr><td colspan="7">ยังไม่มีประกาศ</td></tr>';
+}
+function posterOf(id){ const o = rows.find(r => r.id === id); if(o) showPoster(o); }
+
+/* ---------- ฟอร์ม ---------- */
+function resetForm(){
+  FIELDS.forEach(f => $(f).value = '');
+  $('status').value = 'ประกาศ'; $('remark').value = DEFAULT_REMARK;
+  setSlots(); drawn.clearLayers(); decor.clearLayers(); setPlacing(false);
+  $('formTitle').textContent = 'เพิ่มประกาศใหม่'; $('msg').textContent = '';
+}
+$('resetBtn').onclick = resetForm;
+$('newBtn').onclick = () => { resetForm(); window.scrollTo({top:0, behavior:'smooth'}); $('area').focus(); };
+
+function edit(id){
+  const o = rows.find(r => r.id === id); if(!o) return;
+  FIELDS.forEach(f => $(f).value = o[f] || '');
+  setSlots(slotsOf(o)); loadGeo(o.geojson);
+  $('formTitle').textContent = 'แก้ไขประกาศ'; window.scrollTo({top:0, behavior:'smooth'});
+}
+
+function collectForm(){
+  const d = {};
+  FIELDS.forEach(f => d[f] = $(f).value.trim());
+  d.slots = getSlots();
+  const gj = drawn.toGeoJSON();
+  d.geojson = gj.features.length ? JSON.stringify(gj) : '';
+  return d;
+}
+
+$('saveBtn').onclick = () => {
+  const d = collectForm();
+  if(!d.area || !d.slots.length){ $('msg').textContent = '⚠ กรุณากรอกพื้นที่และวันที่อย่างน้อย 1 ช่วง'; return; }
+  $('saveBtn').disabled = true; $('msg').textContent = 'กำลังบันทึก...';
+  google.script.run.withSuccessHandler(() => {
+    $('saveBtn').disabled = false; resetForm(); $('msg').textContent = '✔ บันทึกแล้ว'; reload();
+  }).withFailureHandler(e => {$('saveBtn').disabled = false; $('msg').textContent = '❌ ' + e.message;}).adminSave(PW, d);
+};
+$('posterBtn').onclick = () => {
+  const d = collectForm();
+  if(!d.area || !d.slots.length){ $('msg').textContent = '⚠ กรอกพื้นที่และวันที่ก่อนสร้างภาพ'; return; }
+  showPoster(d);
+};
+
+function del(id){
+  if(!confirm('ยืนยันการลบประกาศนี้?')) return;
+  google.script.run.withSuccessHandler(reload).withFailureHandler(e => alert(e.message)).adminDelete(PW, id);
+}
+</script>
+</body>
+</html>

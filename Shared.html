@@ -1,0 +1,334 @@
+<style>
+.map-label{width:0;height:0;overflow:visible}
+.map-label .lbl{position:absolute;left:0;top:0;transform:translate(-50%,-50%);white-space:nowrap;background:#fff;color:#5a0f52;border:2px solid #74045f;border-radius:14px;padding:1px 10px;font:700 14px 'Sarabun',sans-serif;box-shadow:0 1px 5px rgba(0,0,0,.6)}
+.pt-end{width:0;height:0;overflow:visible}
+.pt-end .dot{position:absolute;left:0;top:0;transform:translate(-50%,-50%);width:18px;height:18px;border-radius:50%;border:3px solid #fff;box-shadow:0 0 5px rgba(0,0,0,.7)}
+.pt-end .tag{position:absolute;left:0;top:-32px;transform:translateX(-50%);white-space:nowrap;color:#fff;font:700 12px 'Sarabun',sans-serif;padding:1px 8px;border-radius:10px;border:2px solid #fff}
+.pt-end .s{background:#16a34a}.pt-end .e{background:#dc2626}
+.pm-back{position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,.78);z-index:99999;display:flex;align-items:center;justify-content:center;padding:12px}
+.pm-box{background:#fff;border-radius:12px;width:min(780px,100%);max-height:100%;overflow:auto;padding:12px;text-align:center;font-family:'Sarabun',sans-serif}
+.pm-box img{width:100%;height:auto;border-radius:6px;display:block;margin:0 auto 10px}
+.pm-box button{font-family:inherit;padding:8px 16px;border:0;border-radius:6px;cursor:pointer;background:#74045f;color:#fff;font-size:14px;margin:0 4px}
+.pm-box button.gray{background:#868e96}
+.pm-note{font-size:12px;color:#666;margin-top:8px}
+</style>
+<script>
+/* ===================== ตัวช่วยทั่วไป ===================== */
+const LOGO_URL='https://raw.githubusercontent.com/Aonint12/images/main/pea_logo_big.png';
+const MONTHS_TH = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function todayStr(){const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+function thDate(s){const p=String(s||'').split('-').map(Number);if(!p[0])return s||'';return p[2]+' '+MONTHS_TH[p[1]-1]+' '+(p[0]+543);}
+function slotsOf(o){return Array.isArray(o.slots)?o.slots.filter(s=>s&&s.date):[];}
+function slotText(s){return 'วันที่ '+thDate(s.date)+(s.start?' เวลา '+s.start+(s.end?' – '+s.end:'')+' น.':'');}
+function kindOf(o){const t=todayStr(),d=slotsOf(o).map(s=>s.date);if(d.indexOf(t)>=0)return 'today';return d.some(x=>x>t)?'upcoming':'past';}
+function sortKey(o){
+  const t=todayStr(),s=slotsOf(o).slice().sort((a,b)=>(a.date+(a.start||'')).localeCompare(b.date+(b.start||'')));
+  const f=s.find(x=>x.date>=t)||s[s.length-1];return f?f.date+(f.start||''):'';
+}
+function parseGeo(s){
+  try{const g=typeof s==='string'?JSON.parse(s):s;return g&&g.features?g:{type:'FeatureCollection',features:[]};}
+  catch(e){return {type:'FeatureCollection',features:[]};}
+}
+
+/* ===================== ป้ายกำกับ / จุดเริ่ม-สิ้นสุด บนแผนที่ Leaflet ===================== */
+function labelIcon(text){return L.divIcon({className:'map-label',html:'<span class="lbl">'+esc(text)+'</span>',iconSize:null});}
+function labelMarker(ll,text){
+  const m=L.marker(ll,{icon:labelIcon(text),zIndexOffset:1000});
+  m.feature={type:'Feature',properties:{label:text}};
+  return m;
+}
+function endMarker(ll,start){
+  return L.marker(ll,{icon:L.divIcon({className:'pt-end',iconSize:null,
+    html:'<span class="dot '+(start?'s':'e')+'"></span><span class="tag '+(start?'s':'e')+'">'+(start?'เริ่มต้น':'สิ้นสุด')+'</span>'}),
+    interactive:false,zIndexOffset:900});
+}
+function addLineEnds(group,ll){if(!ll||ll.length<2)return;group.addLayer(endMarker(ll[0],true));group.addLayer(endMarker(ll[ll.length-1],false));}
+function geoLayer(gj,color){
+  return L.geoJSON(gj,{
+    style:()=>({color:color,weight:4,fillOpacity:.2}),
+    pointToLayer:(f,ll)=>(f.properties&&f.properties.label)?labelMarker(ll,f.properties.label):L.marker(ll)
+  });
+}
+
+/* ===================== สร้างภาพประกาศ (Canvas) ===================== */
+const CFG_P=new Promise(res=>{
+  try{google.script.run.withSuccessHandler(res).withFailureHandler(()=>res({})).getConfig();}catch(e){res({});}
+});
+function PF(w,s){return w+' '+s+'px Sarabun,"Noto Sans Thai",Tahoma,sans-serif';}
+function loadImg(src,cors){
+  return new Promise(res=>{const i=new Image();if(cors)i.crossOrigin='anonymous';i.onload=()=>res(i);i.onerror=()=>res(null);i.src=src;});
+}
+async function loadFonts(){
+  if(!document.fonts)return;
+  await Promise.all([400,600,700,800].map(w=>document.fonts.load(w+' 28px Sarabun','กขค ABC').catch(()=>{})));
+}
+function rr(c,x,y,w,h,r){
+  if(typeof r==='number')r=[r,r,r,r];
+  c.beginPath();c.moveTo(x+r[0],y);c.lineTo(x+w-r[1],y);c.quadraticCurveTo(x+w,y,x+w,y+r[1]);
+  c.lineTo(x+w,y+h-r[2]);c.quadraticCurveTo(x+w,y+h,x+w-r[2],y+h);c.lineTo(x+r[3],y+h);
+  c.quadraticCurveTo(x,y+h,x,y+h-r[3]);c.lineTo(x,y+r[0]);c.quadraticCurveTo(x,y,x+r[0],y);c.closePath();
+}
+function wrap(c,text,maxW,firstIndent){
+  firstIndent=firstIndent||0;
+  const out=[];
+  String(text).split('\n').forEach(par=>{
+    const segs=(typeof Intl!=='undefined'&&Intl.Segmenter)?Array.from(new Intl.Segmenter('th',{granularity:'word'}).segment(par),s=>s.segment):Array.from(par);
+    let line='',first=out.length===0;
+    segs.forEach(seg=>{
+      const lim=first?maxW-firstIndent:maxW,t=line+seg;
+      if(line&&c.measureText(t).width>lim){out.push(line.trimEnd());line=seg.trimStart();first=false;}else line=t;
+    });
+    out.push(line);
+  });
+  return out;
+}
+function fitFont(c,text,weight,size,maxW){while(size>14){c.font=PF(weight,size);if(c.measureText(text).width<=maxW)break;size--;}return size;}
+function card(c,x,y,w,h,r,fill,stroke,lw){
+  c.save();c.shadowColor='rgba(80,20,80,.14)';c.shadowBlur=18;c.shadowOffsetY=4;rr(c,x,y,w,h,r);c.fillStyle=fill;c.fill();c.restore();
+  if(stroke){rr(c,x,y,w,h,r);c.lineWidth=lw||3;c.strokeStyle=stroke;c.stroke();}
+}
+function bolt(c,cx,cy,s,col){
+  const p=[[.15,-1],[-.6,.1],[-.12,.1],[-.3,1],[.6,-.25],[.1,-.25]];
+  c.beginPath();p.forEach((q,i)=>{const X=cx+q[0]*s,Y=cy+q[1]*s;i?c.lineTo(X,Y):c.moveTo(X,Y);});c.closePath();c.fillStyle=col;c.fill();
+}
+function iconRing(c,cx,cy,r){
+  c.save();c.shadowColor='rgba(0,0,0,.18)';c.shadowBlur=12;c.fillStyle='#fff';c.beginPath();c.arc(cx,cy,r,0,7);c.fill();c.restore();
+  c.lineWidth=5;c.strokeStyle='#6b1a63';c.beginPath();c.arc(cx,cy,r-3,0,7);c.stroke();
+}
+function iconPin(c,cx,cy){
+  c.strokeStyle='#9a9aa5';c.lineWidth=5;c.lineCap='round';c.beginPath();c.moveTo(cx,cy+8);c.lineTo(cx,cy+36);c.stroke();
+  const g=c.createRadialGradient(cx-8,cy-22,2,cx,cy-12,26);g.addColorStop(0,'#ff9db0');g.addColorStop(1,'#e11d48');
+  c.fillStyle=g;c.beginPath();c.arc(cx,cy-12,24,0,7);c.fill();
+}
+function iconCal(c,cx,cy){
+  rr(c,cx-36,cy-34,72,70,12);c.fillStyle='#eef0ff';c.fill();
+  rr(c,cx-36,cy-34,72,22,[12,12,0,0]);c.fillStyle='#3b82f6';c.fill();
+  c.fillStyle='#a5acd8';for(let r=0;r<3;r++)for(let k=0;k<4;k++)c.fillRect(cx-26+k*16,cy-4+r*13,9,8);
+}
+function iconWarn(c,cx,cy){
+  c.lineJoin='round';c.lineWidth=10;c.strokeStyle='#f59e0b';c.fillStyle='#f59e0b';
+  c.beginPath();c.moveTo(cx,cy-34);c.lineTo(cx+38,cy+28);c.lineTo(cx-38,cy+28);c.closePath();c.fill();c.stroke();
+  c.fillStyle='#4a1049';c.font=PF(800,44);c.textAlign='center';c.textBaseline='middle';c.fillText('!',cx,cy+8);
+}
+function pill(c,text,cx,cy,font,fg,bg,border,padX,h){
+  c.font=font;const w=c.measureText(text).width+padX*2;
+  rr(c,cx-w/2,cy-h/2,w,h,h/2);c.fillStyle=bg;c.fill();c.lineWidth=3;c.strokeStyle=border;c.stroke();
+  c.fillStyle=fg;c.textAlign='center';c.textBaseline='middle';c.fillText(text,cx,cy+1);
+}
+
+/* วาดแผนที่ดาวเทียม + รูปที่วาดไว้ลงบน canvas */
+async function drawMapCanvas(c,x,y,w,h,gj){
+  const pts=[];
+  gj.features.forEach(f=>{const g=f.geometry;if(!g)return;
+    if(g.type==='Point')pts.push(g.coordinates);
+    else if(g.type==='LineString')g.coordinates.forEach(p=>pts.push(p));
+    else if(g.type==='Polygon')g.coordinates[0].forEach(p=>pts.push(p));});
+  if(!pts.length)return false;
+  const lngs=pts.map(p=>p[0]),lats=pts.map(p=>p[1]);
+  const mnx=Math.min(...lngs),mxx=Math.max(...lngs),mny=Math.min(...lats),mxy=Math.max(...lats);
+  const proj=(lng,lat,z)=>{const n=256*Math.pow(2,z),s=Math.sin(lat*Math.PI/180);return [(lng+180)/360*n,(0.5-Math.log((1+s)/(1-s))/(4*Math.PI))*n];};
+  let z=3;
+  for(let t=17;t>=3;t--){
+    const a=proj(mnx,mxy,t),b=proj(mxx,mny,t);
+    if(Math.abs(b[0]-a[0])<=w*0.62&&Math.abs(b[1]-a[1])<=h*0.62){z=t;break;}
+  }
+  const a=proj(mnx,mxy,z),b=proj(mxx,mny,z);
+  const tlx=(a[0]+b[0])/2-w/2,tly=(a[1]+b[1])/2-h/2,nMax=Math.pow(2,z)-1;
+  const jobs=[];
+  for(let ty=Math.max(0,Math.floor(tly/256));ty<=Math.min(nMax,Math.floor((tly+h)/256));ty++)
+    for(let tx=Math.max(0,Math.floor(tlx/256));tx<=Math.min(nMax,Math.floor((tlx+w)/256));tx++){
+      const u='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/'+z+'/'+ty+'/'+tx;
+      jobs.push((async()=>({tx,ty,img:(await loadImg(u,true))||(await loadImg(u+'?_='+Date.now(),true))}))());
+    }
+  const tiles=await Promise.all(jobs);
+  if(!tiles.some(t=>t.img))throw new Error('โหลดแผนที่ดาวเทียมไม่ได้ (ตรวจสอบอินเทอร์เน็ต)');
+  c.save();rr(c,x,y,w,h,14);c.clip();
+  c.fillStyle='#2b3a2b';c.fillRect(x,y,w,h);
+  tiles.forEach(t=>{if(t.img)c.drawImage(t.img,x+t.tx*256-tlx,y+t.ty*256-tly,256,256);});
+  const P=(p)=>{const q=proj(p[0],p[1],z);return [x+q[0]-tlx,y+q[1]-tly];};
+  c.lineJoin='round';c.lineCap='round';
+  const feats=gj.features.filter(f=>f.geometry);
+  feats.filter(f=>f.geometry.type==='Polygon').forEach(f=>{
+    c.beginPath();f.geometry.coordinates[0].forEach((p,i)=>{const q=P(p);i?c.lineTo(q[0],q[1]):c.moveTo(q[0],q[1]);});c.closePath();
+    c.fillStyle='rgba(255,45,85,.14)';c.fill();c.lineWidth=6;c.strokeStyle='#ff2d55';c.stroke();
+  });
+  feats.filter(f=>f.geometry.type==='LineString').forEach(f=>{
+    const path=()=>{c.beginPath();f.geometry.coordinates.forEach((p,i)=>{const q=P(p);i?c.lineTo(q[0],q[1]):c.moveTo(q[0],q[1]);});};
+    path();c.lineWidth=13;c.strokeStyle='rgba(255,255,255,.85)';c.stroke();
+    path();c.lineWidth=7;c.strokeStyle='#ff2d55';c.stroke();
+  });
+  feats.filter(f=>f.geometry.type==='LineString').forEach(f=>{
+    const co=f.geometry.coordinates;if(co.length<2)return;
+    [[co[0],'เริ่มต้น','#16a34a'],[co[co.length-1],'สิ้นสุด','#dc2626']].forEach(e=>{
+      const q=P(e[0]);
+      c.beginPath();c.arc(q[0],q[1],16,0,7);c.fillStyle=e[2];c.fill();c.lineWidth=5;c.strokeStyle='#fff';c.stroke();
+      pill(c,e[1],q[0],q[1]-42,PF(700,26),'#fff',e[2],'#fff',16,42);
+    });
+  });
+  feats.filter(f=>f.geometry.type==='Point').forEach(f=>{
+    const q=P(f.geometry.coordinates),lb=f.properties&&f.properties.label;
+    if(lb){pill(c,lb,q[0],q[1],PF(700,28),'#5a0f52','rgba(255,255,255,.96)','#74045f',18,48);}
+    else{c.beginPath();c.arc(q[0],q[1],17,0,7);c.fillStyle='#e11d48';c.fill();c.lineWidth=5;c.strokeStyle='#fff';c.stroke();
+      c.beginPath();c.arc(q[0],q[1],5,0,7);c.fillStyle='#fff';c.fill();}
+  });
+  c.restore();
+  rr(c,x,y,w,h,14);c.lineWidth=6;c.strokeStyle='#e0a82e';c.stroke();
+  return true;
+}
+
+function drawHeader(c,W,HEAD,cfg,logo){
+  let g=c.createLinearGradient(0,0,W,HEAD);g.addColorStop(0,'#4a0f45');g.addColorStop(.5,'#86277f');g.addColorStop(1,'#561150');
+  c.fillStyle=g;c.fillRect(0,0,W,HEAD);
+  c.strokeStyle='rgba(240,200,90,.55)';c.lineWidth=2;rr(c,24,24,W-48,HEAD-48,14);c.stroke();
+  // โลโก้
+  c.save();c.shadowColor='rgba(0,0,0,.3)';c.shadowBlur=14;c.fillStyle='#fff';c.beginPath();c.arc(155,175,96,0,7);c.fill();c.restore();
+  if(logo){c.save();c.beginPath();c.arc(155,175,88,0,7);c.clip();const s=Math.min(160/logo.width,160/logo.height);
+    c.drawImage(logo,155-logo.width*s/2,175-logo.height*s/2,logo.width*s,logo.height*s);c.restore();}
+  else{c.fillStyle='#74045f';c.beginPath();c.arc(155,175,80,0,7);c.fill();c.fillStyle='#e8b93a';c.beginPath();c.arc(155,175,58,0,7);c.fill();bolt(c,155,175,40,'#74045f');}
+  // ไอคอนขวา
+  c.fillStyle='#ffd24d';c.beginPath();c.arc(W-155,175,70,0,7);c.fill();bolt(c,W-155,175,48,'#6b1a63');
+  // ชื่อหัว
+  c.textAlign='center';c.textBaseline='middle';
+  rr(c,W/2-345,36,690,50,25);c.strokeStyle='rgba(240,200,90,.6)';c.lineWidth=2;c.stroke();
+  c.fillStyle='#f4c95d';c.font=PF(700,22);if('letterSpacing' in c)c.letterSpacing='9px';
+  c.fillText('PROVINCIAL ELECTRICITY AUTHORITY',W/2+4,62);if('letterSpacing' in c)c.letterSpacing='0px';
+  c.save();c.shadowColor='rgba(0,0,0,.45)';c.shadowOffsetY=6;c.shadowBlur=10;c.fillStyle='#ffd24d';c.font=PF(800,138);c.fillText('ประกาศ',W/2,146);c.restore();
+  c.strokeStyle='rgba(240,200,90,.7)';c.lineWidth=2;
+  c.beginPath();c.moveTo(W/2-300,242);c.lineTo(W/2-55,242);c.moveTo(W/2+55,242);c.lineTo(W/2+300,242);c.stroke();
+  c.fillStyle='#f4c95d';[-30,0,30].forEach(d=>{c.beginPath();c.moveTo(W/2+d,234);c.lineTo(W/2+d+8,242);c.lineTo(W/2+d,250);c.lineTo(W/2+d-8,242);c.closePath();c.fill();});
+  const t1='งดจ่ายกระแสไฟฟ้าชั่วคราว';c.font=PF(800,54);const w1=Math.max(690,c.measureText(t1).width+130);
+  rr(c,W/2-w1/2,262,w1,84,42);c.fillStyle='#e9dff0';c.fill();c.fillStyle='#4a1049';c.fillText(t1,W/2,305);
+  const fs=fitFont(c,cfg.branch,800,38,640),w2=Math.max(540,c.measureText(cfg.branch).width+110);
+  g=c.createLinearGradient(0,350,0,HEAD);g.addColorStop(0,'#d9ad34');g.addColorStop(1,'#a87a14');
+  c.fillStyle=g;c.fillRect(W/2-w2/2-46,352,w2+92,HEAD-352);
+  rr(c,W/2-w2/2,346,w2,HEAD-346,[18,18,0,0]);c.fillStyle='#fff3cf';c.fill();
+  c.fillStyle='#4a1049';c.font=PF(800,fs);c.fillText(cfg.branch,W/2,377);
+  g=c.createLinearGradient(0,HEAD-14,0,HEAD);g.addColorStop(0,'#f6d77a');g.addColorStop(1,'#c9972a');c.fillStyle=g;c.fillRect(0,HEAD-14,W,14);
+}
+
+async function makePoster(o){
+  const cfg=Object.assign({branch:'การไฟฟ้าส่วนภูมิภาควัดสิงห์',callCenter:'PEA Call Center 1129',line:'บริการไฟฟ้าวัดสิงห์',phone:'056-461-476',web:'www.pea.co.th',logo:''},await CFG_P);
+  await loadFonts();
+  const logo=(cfg.logo?await loadImg(cfg.logo,false):null)||(await loadImg(LOGO_URL,true))||(await loadImg(LOGO_URL+'?_='+Date.now(),true));
+  const gj=parseGeo(o.geojson),hasGeo=gj.features.length>0;
+  const W=1700,M=42,CW=W-2*M,HEAD=412,TXT='#3b2a3b';
+  const pr=document.createElement('canvas').getContext('2d');
+
+  // ---- วัดขนาด
+  const reason=String(o.reason||'').trim().replace(/^เพื่อ\s*/,'');
+  const intro='ด้วย '+cfg.branch+' จะทำการดับกระแสไฟฟ้า'+(reason?'เพื่อ'+reason:'')+' เพื่อความปลอดภัยของพนักงานและทีมงาน จึงจำเป็นต้องดับกระแสไฟฟ้าเป็นการชั่วคราว';
+  pr.font=PF(400,30);const introL=wrap(pr,intro,CW-68,56),introH=52+introL.length*48;
+  const gap=22,cw=(CW-2*gap)/3,pad=24,lh=42,sep=30;
+  const slots=slotsOf(o);
+  const cols=[
+    {t:'พื้นที่ที่ได้รับผลกระทบ',p:String(o.area||'').split('\n').map(s=>s.trim()).filter(Boolean)},
+    {t:'วันที่ – เวลา หยุดจ่ายกระแสไฟฟ้า',p:slots.map(slotText)},
+    {t:'สาเหตุในการหยุดจ่ายกระแสไฟฟ้า',p:[reason||'-']}
+  ];
+  cols[1].fs=29;
+  while(cols[1].fs>20&&cols[1].p.some(s=>{pr.font=PF(400,cols[1].fs);return pr.measureText(s).width>cw-2*pad;}))cols[1].fs--;
+  cols.forEach(k=>{if(!k.p.length)k.p=['-'];pr.font=PF(400,k.fs||29);k.l=k.p.map(s=>wrap(pr,s,cw-2*pad));
+    k.h=Math.max(92,pad*2+k.l.reduce((a,l)=>a+l.length*lh,0)+(k.l.length-1)*sep);});
+  const remark=String(o.remark||'').trim();
+  pr.font=PF(700,28);const labW=pr.measureText('หมายเหตุ : ').width;
+  pr.font=PF(400,28);const remL=remark?wrap(pr,remark,CW-68,labW):[];
+  const remH=remark?44+remL.length*42:0;
+  const MAPH=640,mapBoxH=hasGeo?30+46+18+MAPH+30:0,footH=190,barH=68;
+
+  // ---- ตำแหน่งแนวตั้ง
+  let y=HEAD+32;const pillY=y;y+=58+22;
+  const introY=y;y+=introH+28;
+  const colsY=y,headY=colsY+114,boxY=headY+56+8;
+  y=boxY+Math.max(...cols.map(k=>k.h))+30;
+  const remY=y;if(remark)y+=remH+28;
+  const mapY=y;if(hasGeo)y+=mapBoxH+26;
+  const footY=y;const H=footY+footH+28+barH;
+
+  const cv=document.createElement('canvas');cv.width=W;cv.height=H;const c=cv.getContext('2d');
+  const bg=c.createLinearGradient(0,0,0,H);bg.addColorStop(0,'#f5f0f9');bg.addColorStop(1,'#ebe1f2');c.fillStyle=bg;c.fillRect(0,0,W,H);
+  drawHeader(c,W,HEAD,cfg,logo);
+
+  // แจ้งประชาสัมพันธ์
+  rr(c,M,pillY,300,58,29);c.fillStyle='#6b1a63';c.fill();c.fillStyle='#fff';c.font=PF(700,28);c.textAlign='center';c.textBaseline='middle';c.fillText('แจ้งประชาสัมพันธ์',M+150,pillY+30);
+  // ข้อความนำ
+  card(c,M,introY,CW,introH,28,'#fff');
+  c.fillStyle=TXT;c.font=PF(400,30);c.textAlign='left';
+  introL.forEach((t,i)=>c.fillText(t,M+34+(i===0?56:0),introY+26+i*48+24));
+  // 3 คอลัมน์
+  cols.forEach((k,i)=>{
+    const x=M+i*(cw+gap),cx=x+cw/2;
+    iconRing(c,cx,colsY+50,50);
+    if(i===0)iconPin(c,cx,colsY+50);else if(i===1)iconCal(c,cx,colsY+50);else iconWarn(c,cx,colsY+50);
+    rr(c,x,headY,cw,56,28);c.fillStyle='#5a1254';c.fill();
+    const fs=fitFont(c,k.t,700,27,cw-30);c.font=PF(700,fs);c.fillStyle='#fff';c.textAlign='center';c.textBaseline='middle';c.fillText(k.t,cx,headY+29);
+    card(c,x,boxY,cw,k.h,26,'#fff');
+    c.fillStyle=TXT;c.font=PF(400,k.fs||29);let cy=boxY+pad;
+    k.l.forEach((ls,pi)=>{
+      ls.forEach(t=>{c.textAlign='center';c.textBaseline='middle';c.fillText(t,cx,cy+lh/2);cy+=lh;});
+      if(pi<k.l.length-1){c.save();c.setLineDash([6,6]);c.strokeStyle='#d8c6df';c.lineWidth=2;c.beginPath();c.moveTo(x+24,cy+sep/2);c.lineTo(x+cw-24,cy+sep/2);c.stroke();c.restore();cy+=sep;}
+    });
+  });
+  // หมายเหตุ
+  if(remark){
+    card(c,M,remY,CW,remH,30,'#fff8e1','#f0c040',3);
+    c.textAlign='left';c.textBaseline='middle';c.font=PF(700,28);c.fillStyle='#b7791f';c.fillText('หมายเหตุ :',M+34,remY+22+21);
+    c.font=PF(400,28);c.fillStyle='#4a3a2a';
+    remL.forEach((t,i)=>c.fillText(t,M+34+(i===0?labW:0),remY+22+i*42+21));
+  }
+  // แผนที่
+  if(hasGeo){
+    card(c,M,mapY,CW,mapBoxH,32,'#fff');
+    const title='ผังพื้นที่งดจ่ายกระแสไฟฟ้าชั่วคราว';
+    c.font=PF(700,32);c.fillStyle='#5a0f52';c.textAlign='center';c.textBaseline='middle';c.fillText(title,W/2,mapY+28+18);
+    const tw=c.measureText(title).width;c.strokeStyle='#5a0f52';c.lineWidth=2;c.beginPath();c.moveTo(W/2-tw/2,mapY+28+38);c.lineTo(W/2+tw/2,mapY+28+38);c.stroke();
+    await drawMapCanvas(c,M+28,mapY+30+46+18,CW-56,MAPH,gj);
+  }
+  // ท้ายกระดาษ
+  const lw=1060,rx=M+lw+22,rw=CW-lw-22;
+  card(c,M,footY,lw,footH,30,'#3f0b3c');
+  c.fillStyle='#f4c95d';c.beginPath();c.moveTo(M+70,footY+footH/2-4);c.lineTo(M+130,footY+footH/2-34);c.lineTo(M+130,footY+footH/2+34);c.closePath();c.fill();
+  c.fillRect(M+60,footY+footH/2-10,16,22);
+  c.textAlign='left';c.textBaseline='middle';c.fillStyle='#f4c95d';c.font=PF(800,36);c.fillText('การวางแผนไฟฟ้า เพื่อคุณภาพชีวิตที่ดีกว่า',M+160,footY+footH/2-20);
+  c.fillStyle='#fff';c.font=PF(400,28);c.fillText('ขออภัยในความไม่สะดวกมา ณ โอกาสนี้',M+160,footY+footH/2+24);
+  card(c,rx,footY,rw,footH,30,'#7a2272');
+  c.fillStyle='#fff';c.font=PF(800,30);c.fillText('สอบถามข้อมูลเพิ่มเติม',rx+30,footY+36);
+  [['☎',cfg.callCenter],['L',cfg.line],['☎',cfg.phone]].forEach((r,i)=>{
+    const yy=footY+84+i*42;c.fillStyle='#fff';c.beginPath();c.arc(rx+44,yy,17,0,7);c.fill();
+    c.fillStyle='#7a2272';c.font=PF(800,20);c.textAlign='center';c.fillText(r[0],rx+44,yy+1);
+    c.fillStyle='#fff';c.font=PF(600,27);c.textAlign='left';c.fillText(r[1],rx+78,yy+1);
+  });
+  c.fillStyle='#3a0b38';c.fillRect(0,H-barH,W,barH);
+  c.fillStyle='#fff';c.font=PF(400,23);c.textAlign='left';c.textBaseline='middle';
+  c.fillText('การไฟฟ้าส่วนภูมิภาค มุ่งมั่นพัฒนาระบบจำหน่ายไฟฟ้าให้มีความมั่นคง เพียงพอ และปลอดภัย เพื่อคุณภาพชีวิตที่ดีของคนไทยอย่างยั่งยืน',M,H-barH/2);
+  c.font=PF(700,26);c.textAlign='right';c.fillText(cfg.web,W-M,H-barH/2);
+  return cv;
+}
+
+/* ===================== หน้าต่างแสดง/ดาวน์โหลดภาพประกาศ ===================== */
+async function showPoster(o){
+  const back=document.createElement('div');back.className='pm-back';
+  const box=document.createElement('div');box.className='pm-box';
+  box.innerHTML='<p style="padding:40px 10px">⏳ กำลังสร้างภาพประกาศ (โหลดแผนที่ดาวเทียม)...</p>';
+  back.appendChild(box);document.body.appendChild(back);
+  const close=()=>back.remove();
+  back.addEventListener('click',e=>{if(e.target===back)close();});
+  try{
+    const cv=await makePoster(o);
+    let url;
+    try{url=cv.toDataURL('image/png');}
+    catch(e){throw new Error('บันทึกภาพไม่ได้ เพราะแผนที่ดาวเทียมไม่อนุญาตให้ดึงภาพ');}
+    box.innerHTML='';
+    const img=new Image();img.src=url;box.appendChild(img);
+    const dl=document.createElement('button');dl.textContent='⬇ ดาวน์โหลดภาพ (PNG)';
+    dl.onclick=()=>cv.toBlob(b=>{const a=document.createElement('a');a.href=URL.createObjectURL(b);
+      a.download='ประกาศดับไฟ_'+((slotsOf(o)[0]||{}).date||'')+'.png';document.body.appendChild(a);a.click();a.remove();},'image/png');
+    const cl=document.createElement('button');cl.className='gray';cl.textContent='ปิด';cl.onclick=close;
+    box.appendChild(dl);box.appendChild(cl);
+    const n=document.createElement('div');n.className='pm-note';n.textContent='ถ้าปุ่มดาวน์โหลดไม่ทำงาน ให้คลิกขวา (หรือกดค้างบนมือถือ) ที่รูปแล้วเลือกบันทึกรูปภาพ';box.appendChild(n);
+  }catch(e){
+    box.innerHTML='<p style="padding:20px;color:#c00">❌ '+esc(e.message||e)+'</p>';
+    const cl=document.createElement('button');cl.className='gray';cl.textContent='ปิด';cl.onclick=close;box.appendChild(cl);
+  }
+}
+</script>
